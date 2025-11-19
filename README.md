@@ -1,7 +1,21 @@
+1. 概述
 云基础设施自动化 Agent
 基于 Qwen 大模型的阿里云资源自动化交付系统，支持 ECS 实例和 OSS Bucket 的标准化申请与自动化交付。
 
-功能特性
+2. 系统设计思路
+核心概念
+
+用户输入 → 通过 API 接收请求，例如：“帮我创建一个 ECS 和 OSS bucket”
+
+Agent → 解析意图，判断需要调用哪些工具
+
+工具 (Tools) → 封装阿里云 SDK 接口，如创建 ECS、OSS
+
+LLM 决策 → 使用 ReAct 机制，逐步推理，调用工具执行操作
+
+返回结果 → 将资源创建状态返回给用户
+
+3. 功能特性
 🤖 智能对话：基于 Qwen 大模型的自然语言交互
 
 🚀 自动化交付：一键创建 ECS 实例和 OSS Bucket
@@ -40,7 +54,7 @@ infra-agent/
 
 1. 克隆项目
 bash
-git clone <repository-url>
+git clone https://github.com/JaciCao-123/qwen-agent-provision/tree/main/agent_infra
 cd infra-agent
 
 2. 环境配置
@@ -55,3 +69,6 @@ python interaction.py
 
 5. API使用示例
 import requests
+
+<img width="1655" height="640" alt="image" src="https://github.com/user-attachments/assets/a15f62d1-905d-4ac8-b4aa-7e70add3407c" />
+
