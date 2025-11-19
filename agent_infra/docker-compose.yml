@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  infra-agent:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - QWEN_API_KEY=${QWEN_API_KEY}
+      - ALIYUN_ACCESS_KEY_ID=${ALIYUN_ACCESS_KEY_ID}
+      - ALIYUN_ACCESS_KEY_SECRET=${ALIYUN_ACCESS_KEY_SECRET}
+      - ALIYUN_REGION=${ALIYUN_REGION}
+    volumes:
+      - ./.env:/app/.env
+    restart: unless-stopped
+
+  # 可以添加Redis用于状态存储
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped

@@ -1,0 +1,10 @@
+openai==0.28.1
+fastapi==0.104.1
+uvicorn==0.24.0
+pydantic==1.10.12
+python-dotenv==1.0.0
+alibabacloud_ecs20140526==3.0.6
+alibabacloud_oss20190517==1.0.4
+alibabacloud_tea_openapi==0.3.8
+alibabacloud_tea_util==0.3.11
+requests==2.31.0
