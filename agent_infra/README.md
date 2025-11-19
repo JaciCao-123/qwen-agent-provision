@@ -55,3 +55,5 @@ python interaction.py
 
 5. API使用示例
 import requests
+
+<img width="1773" height="201" alt="image" src="https://github.com/user-attachments/assets/acf835bf-5afe-4cd7-a250-12299dff6a17" />
