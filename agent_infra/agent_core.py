@@ -2,10 +2,19 @@ import json
 import re
 import logging
 import requests
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from config import load_config
 from tools import tool_kit
 
+# 配置日志
+# logging.basicConfig(
+#     level=logging.INFO,
+#     format='%(asctime)s - %(levelname)s - %(message)s',
+#     handlers=[
+#         logging.StreamHandler(),
+#         logging.FileHandler('agent.log', encoding='utf-8')
+#     ]
+# )
 logger = logging.getLogger(__name__)
 
 
@@ -17,6 +26,7 @@ class QwenClient:
         self.api_key = config["api_key"]
         self.base_url = config["base_url"]
         self.model = config["model"]
+        logger.info("Qwen客户端初始化完成")
 
     def chat_completion(self, messages: List[Dict[str, str]]) -> str:
         """调用Qwen聊天补全API"""
@@ -48,164 +58,192 @@ class QwenClient:
 
 
 class SimpleAgent:
-    """简化的Agent实现"""
-
     def __init__(self):
         self.llm = QwenClient()
         self.tools = {
             "create_ecs_instance": {
                 "function": tool_kit.create_ecs_instance,
-                "description": "创建ECS实例。输入应该是JSON格式，包含instance_type, image_id, instance_name, security_group_id, vswitch_id, system_disk_size, password等参数"
+                "description": "创建ECS实例。需要参数: instance_type, image_id, instance_name等"
             },
             "create_oss_bucket": {
                 "function": tool_kit.create_oss_bucket,
-                "description": "创建OSS Bucket。输入应该是JSON格式，包含bucket_name, storage_class, acl等参数"
+                "description": "创建OSS Bucket。需要参数: bucket_name, acl等"
             },
             "check_ecs_status": {
                 "function": tool_kit.check_ecs_status,
-                "description": "检查ECS实例状态。输入应该是实例ID字符串"
+                "description": "检查ECS实例状态。需要参数: 实例ID"
             }
         }
+        logger.info("Agent初始化完成，可用工具: %s", list(self.tools.keys()))
 
     def _extract_action(self, text: str) -> Dict[str, Any]:
         """从文本中提取Action"""
         text = text.strip()
 
-        # 检查是否有最终答案
-        if "Final Answer:" in text:
-            return {
-                "type": "final",
-                "content": text.split("Final Answer:")[-1].strip()
-            }
-
-        # 解析Action和Action Input
-        action_match = re.search(r"Action:\s*(.+?)\s*Action Input:\s*(.+)", text, re.DOTALL)
+        # 先尝试解析Action和Action Input，优先于Final Answer
+        action_match = re.search(r"Action:\s*(\w+)\s*Action Input:\s*(.+?)(?:\s+Observation:|$)", text, re.DOTALL)
         if action_match:
             action = action_match.group(1).strip()
             action_input = action_match.group(2).strip()
+            #logger.debug("提取到动作: %s, 输入: %s", action, action_input)
 
-            try:
-                action_input = json.loads(action_input)
-            except json.JSONDecodeError:
-                # 如果不是JSON，保持原样
-                pass
+            # 清理JSON格式
+            action_input = action_input.replace('```json', '').replace('```', '').strip()
 
+            # 解析JSON或处理文本
+            if action_input.startswith('{'):
+                try:
+                    parsed_input = json.loads(action_input)
+                    logger.debug("成功解析JSON参数")
+                    return {
+                        "type": "action",
+                        "action": action,
+                        "action_input": parsed_input
+                    }
+                except json.JSONDecodeError:
+                    #logger.warning("JSON解析失败，尝试文本处理")
+                    pass
+
+            # 文本处理逻辑
+            if action == "create_oss_bucket":
+                bucket_name = self._extract_bucket_name(action_input)
+                if bucket_name:
+                    logger.debug("从文本提取到bucket名称: %s", bucket_name)
+                    return {
+                        "type": "action",
+                        "action": action,
+                        "action_input": {"bucket_name": bucket_name, "acl": "private"}
+                    }
+
+        # 检查最终答案 - 只有在没有Action时才返回Final Answer
+        if "Final Answer:" in text:
+            final_content = text.split("Final Answer:")[-1].strip()
             return {
-                "type": "action",
-                "action": action,
-                "action_input": action_input
+                "type": "final",
+                "content": final_content
             }
 
-        # 如果没有明确的action，认为是最终答案
+        # 推断OSS创建动作，但不再自动生成名称
+        if "oss" in text.lower() and "bucket" in text.lower():
+            return {
+                "type": "final",
+                "content": "请提供要创建的OSS Bucket名称。"
+            }
+
+        # 默认返回最终答案
         return {
             "type": "final",
             "content": text
         }
 
+    def _extract_bucket_name(self, text: str) -> str:
+        """从文本中提取bucket名称"""
+        # 查找bucket名称模式
+        patterns = [
+            r'"bucket_name"\s*:\s*"([^"]+)"',
+            r"'bucket_name'\s*:\s*'([^']+)'",
+            r'名称[：:]\s*"([^"]+)"',
+            r'名称[：:]\s*([a-z0-9][a-z0-9-]{1,61}[a-z0-9])',
+            r'名称为?\s*"([^"]+)"',
+            r'名称为?\s*([a-z0-9][a-z0-9-]{1,61}[a-z0-9])',
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                bucket_name = match.group(1).strip()
+                if self._is_valid_bucket_name(bucket_name):
+                    return bucket_name
+
+        # 查找符合命名规则的字符串
+        bucket_match = re.search(r'([a-z0-9][a-z0-9-]{1,61}[a-z0-9])', text)
+        if bucket_match:
+            bucket_name = bucket_match.group(1)
+            if self._is_valid_bucket_name(bucket_name):
+                return bucket_name
+
+        # 不再自动生成名称
+        return None
+
+    def _is_valid_bucket_name(self, bucket_name: str) -> bool:
+        """验证Bucket名称格式"""
+        pattern = r'^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$'
+        return bool(re.match(pattern, bucket_name)) and 3 <= len(bucket_name) <= 63
+
     def _build_system_prompt(self) -> str:
         """构建系统提示词"""
         tools_desc = "\n".join([f"- {name}: {desc['description']}" for name, desc in self.tools.items()])
 
-        return f"""你是一个专业的云基础设施运维AI助手，专门负责阿里云资源的申请和自动化交付。
-
-你的能力包括：
-1. 创建ECS实例（弹性计算服务）
-2. 创建OSS Bucket（对象存储服务）
-3. 检查资源状态
+        return f"""你是一个云基础设施运维AI助手，负责阿里云资源的自动化交付。
 
 可用工具：
 {tools_desc}
 
-工作流程：
-1. 理解用户的需求，明确要创建的资源类型和配置
-2. 收集必要的参数信息，如果用户没有提供完整信息，需要主动询问
-3. 调用相应的工具函数创建资源
-4. 返回创建结果和资源信息
-
 重要规则：
-- 在创建资源前，必须确认所有必要参数都已获得
-- 对于ECS实例，必须的参数包括：实例类型、镜像ID、实例名称
-- 对于OSS Bucket，必须的参数是Bucket名称，且必须全局唯一
-- 使用JSON格式传递参数给工具函数
-- 如果用户的需求不明确，要主动询问澄清
-- 返回结果时要包含资源ID、状态和有用的信息
+- 对于OSS Bucket创建，用户必须提供bucket_name参数
+- bucket_name必须全局唯一，符合命名规范：小写字母、数字和短横线，3-63字符
+- 使用JSON格式传递参数
+- 不要假设操作结果，等待实际执行后的Observation
 
-请按照以下格式思考：
-
-Question: 用户输入的问题
-Thought: 分析用户需求，思考需要做什么
+响应格式：
+Question: 用户输入
+Thought: 分析需求
 Action: 工具名称
-Action Input: 工具的输入（必须是JSON格式）
-Observation: 工具执行结果
-...（这个循环可以重复多次）
-Thought: 现在我有足够信息回答用户
-Final Answer: 最终的回答，包含资源创建结果和后续操作建议
+Action Input: {{"bucket_name": "bucket名称", "acl": "private"}}
+Observation: [等待实际执行结果]
+Final Answer: 基于实际执行结果的最终回答
 
 现在开始处理用户请求："""
 
-    def process_request(self, user_input: str, max_iterations: int = 5) -> str:
+    def process_request(self, user_input: str, max_iterations: int = 3) -> str:
         """处理用户请求"""
-        conversation = []
-        system_prompt = self._build_system_prompt()
-
-        # 初始消息
+        #logger.info("处理用户请求: %s", user_input)
         messages = [
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": self._build_system_prompt()},
             {"role": "user", "content": f"Question: {user_input}"}
         ]
 
         for i in range(max_iterations):
+           # logger.debug("第 %d 次迭代", i+1)
             # 调用LLM
             response = self.llm.chat_completion(messages)
-            conversation.append(f"Thought: {response}")
 
             # 解析响应
             action_info = self._extract_action(response)
 
             if action_info["type"] == "final":
+                logger.info("返回最终答案")
                 return action_info["content"]
 
             elif action_info["type"] == "action":
                 action = action_info["action"]
                 action_input = action_info["action_input"]
+                logger.info("执行动作: %s", action)
 
-                # 执行工具
                 if action in self.tools:
                     try:
-                        # 准备工具输入
-                        if isinstance(action_input, dict):
-                            tool_input = action_input
-                        else:
-                            tool_input = action_input
-
                         # 调用工具
                         tool_func = self.tools[action]["function"]
-                        observation = tool_func(tool_input)
+                        #logger.info("调用工具函数: %s", action)
+                        observation = tool_func(action_input)
+                        #logger.info("工具执行完成，状态: %s", observation.get('status', 'unknown'))
 
-                        # 记录到对话历史
-                        observation_str = json.dumps(observation, ensure_ascii=False, indent=2)
-                        conversation.append(f"Action: {action}")
-                        conversation.append(f"Observation: {observation_str}")
-
-                        # 更新消息
+                        # 更新对话
                         messages.extend([
                             {"role": "assistant", "content": response},
-                            {"role": "user", "content": f"Observation: {observation_str}"}
+                            {"role": "user", "content": f"Observation: {json.dumps(observation, ensure_ascii=False)}"}
                         ])
-
                     except Exception as e:
                         error_msg = f"执行工具 {action} 时出错: {str(e)}"
-                        conversation.append(f"Error: {error_msg}")
+                        #logger.error(error_msg)
                         messages.append({"role": "user", "content": f"Error: {error_msg}"})
                 else:
                     error_msg = f"未知工具: {action}"
-                    conversation.append(f"Error: {error_msg}")
+                    #logger.error(error_msg)
                     messages.append({"role": "user", "content": f"Error: {error_msg}"})
-            else:
-                # 无法解析，返回原始响应
-                return response
 
-        return "达到最大迭代次数，未能完成请求。请检查您的请求是否明确。"
+        #logger.warning("达到最大迭代次数，未能完成请求")
+        return "达到最大迭代次数，未能完成请求。"
 
 
 # 全局Agent实例
