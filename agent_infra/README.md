@@ -71,5 +71,6 @@ python interaction.py
 import requests
 
 
-<img width="1773" height="201" alt="image" src="https://github.com/user-attachments/assets/acf835bf-5afe-4cd7-a250-12299dff6a17" />
+<img width="1560" height="295" alt="image" src="https://github.com/user-attachments/assets/1045285f-aa8c-41c8-b892-32e65158c639" />
+
 
